@@ -104,15 +104,23 @@ if [ "$UNINSTALL" = true ]; then
         rm -rf "$APP_DIR"
     fi
 
-    # Remove upstream from Nginx default config
-    if [ -f "/etc/nginx/sites-available/default" ]; then
-        print_status "Removing Nginx upstream configuration..."
-        sed -i "/# --- $APP_NAME upstream begin ---/,/# --- $APP_NAME upstream end ---/d" /etc/nginx/sites-available/default
-
-        if command -v nginx &> /dev/null; then
-            print_status "Reloading Nginx..."
-            nginx -t && systemctl reload nginx
-        fi
+    # Restore default Nginx config
+    if command -v nginx &> /dev/null; then
+        print_status "Restoring default Nginx configuration..."
+        cat > /etc/nginx/sites-available/default << 'DEFEOF'
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    root /var/www/html;
+    index index.html index.htm index.nginx-debian.html;
+    server_name _;
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+DEFEOF
+        print_status "Reloading Nginx..."
+        nginx -t && systemctl reload nginx
     fi
 
     print_status "✅ Uninstallation completed successfully!"
@@ -231,7 +239,7 @@ EOF
 fi
 
 # ==========================================
-# Nginx Installation (upstream in default)
+# Nginx Installation (default site → upstream)
 # ==========================================
 if [ "$INSTALL_NGINX" = true ]; then
     print_status "🔧 Installing/Configuring Nginx..."
@@ -247,32 +255,42 @@ if [ "$INSTALL_NGINX" = true ]; then
         print_status "Nginx is already installed"
     fi
 
-    NGINX_DEFAULT="/etc/nginx/sites-available/default"
+    print_status "Writing /etc/nginx/sites-available/default..."
+    cat > /etc/nginx/sites-available/default << 'EOF'
+# --- server-player upstream ---
+upstream server-player {
+    server localhost:__HTTP_PORT__;
+}
 
-    # Remove old upstream block if exists
-    if [ -f "$NGINX_DEFAULT" ]; then
-        sed -i "/# --- $APP_NAME upstream begin ---/,/# --- $APP_NAME upstream end ---/d" "$NGINX_DEFAULT"
-    fi
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
 
-    # Check if upstream block already exists in the file (by upstream name)
-    if grep -q "upstream $APP_NAME" "$NGINX_DEFAULT" 2>/dev/null; then
-        print_warning "Upstream '$APP_NAME' already exists in $NGINX_DEFAULT, skipping..."
-    else
-        print_status "Adding upstream to $NGINX_DEFAULT..."
+    location / {
+        proxy_pass http://server-player;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOF
 
-        # Prepend upstream block before the first server block
-        UPSTREAM_BLOCK="# --- $APP_NAME upstream begin ---\nupstream $APP_NAME {\n    server localhost:$HTTP_PORT;\n}\n# --- $APP_NAME upstream end ---\n"
+    # Replace placeholder with actual port
+    sed -i "s/__HTTP_PORT__/$HTTP_PORT/g" /etc/nginx/sites-available/default
 
-        sed -i "1i\\${UPSTREAM_BLOCK}" "$NGINX_DEFAULT"
-    fi
+    # Ensure symlink exists
+    ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 
     # Test and Reload
     print_status "Reloading Nginx..."
     if nginx -t; then
         systemctl reload nginx
-        print_status "✅ Nginx configured successfully!"
-        print_status "   Upstream '$APP_NAME' -> localhost:$HTTP_PORT"
-        print_status "   Use 'proxy_pass http://$APP_NAME;' in your server blocks"
+        print_status "✅ Nginx configured: all domains → localhost:$HTTP_PORT"
     else
         print_error "❌ Nginx configuration failed verification"
         exit 1
@@ -287,9 +305,7 @@ echo "  Service: $APP_NAME"
 echo "  Port:    $HTTP_PORT"
 echo ""
 echo "  Health:  http://localhost:$HTTP_PORT/health"
-echo ""
-echo "  Nginx upstream: $APP_NAME -> localhost:$HTTP_PORT"
-echo "  Usage: proxy_pass http://$APP_NAME;"
+echo "  Nginx:   all domains → localhost:$HTTP_PORT"
 echo ""
 echo "  Commands:"
 echo "    systemctl status $APP_NAME"

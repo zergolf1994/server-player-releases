@@ -36,24 +36,21 @@ sudo ./install.sh --nginx --port 8081
 sudo ./install.sh --app
 ```
 
-## 🔧 Nginx Upstream
+## 🔧 Nginx Configuration
 
-สคริปต์จะเพิ่ม upstream block ใน `/etc/nginx/sites-available/default` โดยอัตโนมัติ:
+สคริปต์จะ**เขียนทับ** `/etc/nginx/sites-available/default` ให้เป็น reverse proxy ไปที่ app โดยอัตโนมัติ:
 
 ```nginx
 upstream server-player {
     server localhost:8081;
 }
-```
 
-สามารถใช้ใน server block ของคุณได้เลย:
-
-```nginx
 server {
-    listen 80;
-    server_name yourdomain.com;
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
 
-    location /player/ {
+    location / {
         proxy_pass http://server-player;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -63,6 +60,8 @@ server {
     }
 }
 ```
+
+> **Note:** ใช้ `server_name _;` ทำให้ทุกโดเมนเข้าถึงได้โดยไม่ต้องกำหนด domain
 
 ## 🗑️ Uninstall
 
