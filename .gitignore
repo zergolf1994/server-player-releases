@@ -9,3 +9,4 @@ Thumbs.db
 
 # Config
 .env
+conf/
